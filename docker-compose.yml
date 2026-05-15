@@ -1,0 +1,99 @@
+name: iot208
+
+services:
+
+  # ── Flask Backend ────────────────────────────────────────────────────────────
+  service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    platform: linux/arm64
+    container_name: iot208-service
+    restart: unless-stopped
+    ports:
+      - "3083:3083"
+    environment:
+      FLASK_ENV: production
+      SECRET_KEY: ${SECRET_KEY}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+
+      # Database
+      # ถ้าใช้ postgres container ในไฟล์นี้ → DB_HOST=postgres
+      # ถ้าใช้ postgres บน Pi host (นอก Docker)  → DB_HOST=host.docker.internal
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-iot208}
+      DB_USER: ${DB_USER:-iot208}
+      DB_PASSWORD: ${DB_PASSWORD}
+
+      # MQTT — external broker
+      MQTT_BROKER:    ${MQTT_BROKER:-mqtt.baan208-iot.biz}
+      MQTT_PORT:      ${MQTT_PORT:-80}
+      MQTT_TRANSPORT: ${MQTT_TRANSPORT:-websockets}
+      MQTT_WS_PATH:   ${MQTT_WS_PATH:-/mqtt}
+      MQTT_USERNAME:  ${MQTT_USERNAME:-}
+      MQTT_PASSWORD:  ${MQTT_PASSWORD:-}
+      MQTT_CLIENT_ID: iot208-backend
+
+      # CORS
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+
+      # Firebase Admin SDK — Push Notification
+      # ไฟล์ถูก COPY เข้า image แล้วผ่าน COPY . .
+      FIREBASE_SERVICE_ACCOUNT_PATH: /app/iot-eefac-firebase-adminsdk-fbsvc-0d55a6cadf.json
+
+    # ให้ container เข้าถึง host ผ่าน host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - iot208-net
+
+  # ── PostgreSQL ───────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    platform: linux/arm64
+    container_name: iot208-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-iot208}
+      POSTGRES_USER: ${DB_USER:-iot208}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-iot208} -d ${DB_NAME:-iot208}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - iot208-net
+
+  # ── Mosquitto MQTT Broker ─────────────────────────────────────────────────────
+  # ปิดไว้ — ใช้ external broker ที่ mqtt.baan208-iot.biz แทน
+  # เปิดใช้ได้ถ้าต้องการ broker ภายใน (uncomment แล้วเพิ่ม depends_on ด้วย)
+  # mosquitto:
+  #   image: eclipse-mosquitto:2
+  #   platform: linux/arm64
+  #   container_name: iot208-mosquitto
+  #   restart: unless-stopped
+  #   ports:
+  #     - "1883:1883"
+  #     - "9001:9001"
+  #   volumes:
+  #     - ./mosquitto/config:/mosquitto/config:ro
+  #     - mosquitto_data:/mosquitto/data
+  #     - mosquitto_log:/mosquitto/log
+  #   networks:
+  #     - iot208-net
+
+volumes:
+  postgres_data:
+  mosquitto_data:
+  mosquitto_log:
+
+networks:
+  iot208-net:
+    driver: bridge

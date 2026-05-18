@@ -111,10 +111,6 @@ class MQTTManager:
             logger.error("[MQTT] ❌ CONNECT FAILED  rc=%s (%s)", rc, reason)
 
     def _on_disconnect(self, client, userdata, rc, *args):
-        """
-        paho VERSION1 disconnect signature: (client, userdata, rc)
-        rc=0 → clean disconnect, rc!=0 → unexpected disconnect
-        """
         self._connected = False
         if rc == 0:
             logger.info("[MQTT] 🔌 Disconnected cleanly (rc=0)")
@@ -129,9 +125,8 @@ class MQTTManager:
 
     def _on_message(self, client, userdata, msg: mqtt.MQTTMessage):
         """
-        Dispatch ตาม topic:
-          iot208/{device_id}/relay/status  → อัปเดต relay state ใน DB
-          iot208/{device_id}/heartbeat     → อัปเดต is_active + last_seen
+          iot208/{device_id}/relay/status 
+          iot208/{device_id}/heartbeat  
         """
         payload_str = msg.payload.decode("utf-8", errors="replace")
 
@@ -181,7 +176,6 @@ class MQTTManager:
     # ── Business logic ────────────────────────────────────────────────────────
 
     def _handle_heartbeat(self, device_id: str):
-        """อัปเดต is_active=True และ last_seen=now()"""
         try:
             with self._app.app_context():
                 from app.services.device_service import DeviceService
@@ -197,10 +191,6 @@ class MQTTManager:
     def _handle_input_status(self, device_id: str, payload: dict, is_retained: bool = False):
         """
         iot208/{device_id}/input/status  payload: {"input": bool, "is_active": bool}
-        - บันทึกลง rain_history
-        - broadcast SSE event type=rain_status
-        - ถ้า input=True และ is_retained=False → push FCM ว่าฝนตก
-          (is_retained=True = ของเก่าที่ broker เก็บไว้ ไม่ใช่ event ใหม่ → ไม่ส่ง FCM)
         """
         input_state = bool(payload.get("input", False))
         is_active   = bool(payload.get("is_active", True))
@@ -273,11 +263,6 @@ class MQTTManager:
             return None, False
 
     def _notify_relay1_on(self, device_id: str, model: str = ""):
-        """ส่ง push notification ไปยัง members ทุกคนที่มี FCM token
-        แยก message ตาม device model:
-          - rain sensor → เปิดวาล์วปล่อยน้ำออกจากถัง
-          - water plant → เริ่มรดน้ำ
-        """
         if "rain" in model.lower():
             title = "💧 เปิดวาล์วน้ำแล้ว"
             body  = "เปิดวาล์วปล่อยน้ำออกจากถังแล้ว"

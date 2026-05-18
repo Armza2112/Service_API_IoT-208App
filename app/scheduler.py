@@ -3,8 +3,10 @@ Automation Scheduler -- APScheduler singleton
 Job ID convention:
   "auto_<automation_id>"          -- scheduled relay trigger
   "float_off_<automation_id>"     -- post-trigger float-sensor monitor
+  "verify_off_<device_id>_<ch>"   -- relay-off safety re-check after 5 min
 """
 import logging
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -103,6 +105,26 @@ def _run_relay(
             logger.error("[Scheduler] automation %s error: %s", automation_id, exc)
             return
 
+        # ── Relay-off safety verify (5 min after close command) ──────────────
+        # If relay is still ON in DB after 5 min → re-send close command once
+        if not action:
+            try:
+                verify_id = f"verify_off_{device_id}_{channel}"
+                scheduler_manager._scheduler.add_job(
+                    func=_verify_relay_off,
+                    trigger="date",
+                    run_date=datetime.now() + timedelta(minutes=5),
+                    id=verify_id,
+                    replace_existing=True,
+                    args=[app, device_id, channel, verify_id],
+                )
+                logger.info(
+                    "[Scheduler] Relay-off verify scheduled in 5 min  device=%s ch=%s",
+                    device_id, channel,
+                )
+            except Exception as exc:
+                logger.warning("[Scheduler] Could not schedule verify-off: %s", exc)
+
         # ── Float-off monitor ─────────────────────────────────────────────────
         # Only when: turning ON + until_float_off flag set
         if action and until_float_off:
@@ -120,6 +142,44 @@ def _run_relay(
                             monitor_id, device_id, channel)
             except Exception as exc:
                 logger.warning("[Scheduler] Could not start float monitor: %s", exc)
+
+
+def _verify_relay_off(app, device_id: str, channel: int, job_id: str):
+    """
+    One-shot job fired 5 minutes after a relay-OFF command was sent.
+    Reads relay state from DB; if still ON → re-send close command.
+    """
+    with app.app_context():
+        try:
+            from app.entities.device_profile_entity import DeviceProfile
+            from app.mqtt_client import mqtt_manager
+
+            device = DeviceProfile.query.filter_by(device_id=device_id).first()
+            if not device:
+                logger.warning("[VerifyOff] device not found: %s", device_id)
+                return
+
+            relay_state = device.status_relay or []
+            still_on = bool(relay_state[channel]) if channel < len(relay_state) else False
+
+            if still_on:
+                logger.warning(
+                    "[VerifyOff] relay[%d] still ON after 5 min -- re-sending OFF  device=%s",
+                    channel, device_id,
+                )
+                mqtt_manager.publish_relay_command(device_id, channel, False)
+            else:
+                logger.info(
+                    "[VerifyOff] relay[%d] confirmed OFF  device=%s",
+                    channel, device_id,
+                )
+        except Exception as exc:
+            logger.warning("[VerifyOff] Error: %s", exc)
+        finally:
+            try:
+                scheduler_manager._scheduler.remove_job(job_id)
+            except Exception:
+                pass
 
 
 def _check_float_and_off(

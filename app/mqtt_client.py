@@ -288,7 +288,7 @@ class MQTTManager:
                 app       = self._app,
                 title     = title,
                 body      = body,
-                data      = {"type": "relay1_on", "model": model},
+                data      = {"type": "relay1_on", "model_serial": model_serial},
                 dedup_key = f"relay1_on:{device_id}",
             )
             logger.warning("[MQTT] Push notification sent to %d device(s)  title=%r", sent, title)

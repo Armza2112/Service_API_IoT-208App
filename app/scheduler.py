@@ -35,9 +35,10 @@ def _run_relay(
     channel:          int,
     action:           bool,
     automation_id:    int,
-    automation_name:  str  = "",
-    skip_if_raining:  bool = False,
-    until_float_off:  bool = False,
+    automation_name:  str       = "",
+    duration_minutes: int | None = None,
+    skip_if_raining:  bool      = False,
+    until_float_off:  bool      = False,
 ):
     """
     APScheduler callback -- runs inside Flask app context.
@@ -125,6 +126,26 @@ def _run_relay(
             except Exception as exc:
                 logger.warning("[Scheduler] Could not schedule verify-off: %s", exc)
 
+        # ── Duration auto-off ─────────────────────────────────────────────────
+        # When action=ON + duration_minutes set → schedule one-shot relay OFF
+        if action and duration_minutes:
+            try:
+                dur_job_id = f"dur_off_{automation_id}"
+                scheduler_manager._scheduler.add_job(
+                    func=_duration_off,
+                    trigger="date",
+                    run_date=datetime.now() + timedelta(minutes=duration_minutes),
+                    id=dur_job_id,
+                    replace_existing=True,
+                    args=[app, device_id, channel, automation_id, dur_job_id],
+                )
+                logger.info(
+                    "[Scheduler] Duration auto-off in %d min  device=%s ch=%s auto=%s",
+                    duration_minutes, device_id, channel, automation_id,
+                )
+            except Exception as exc:
+                logger.warning("[Scheduler] Could not schedule duration-off: %s", exc)
+
         # ── Float-off monitor ─────────────────────────────────────────────────
         # Only when: turning ON + until_float_off flag set
         if action and until_float_off:
@@ -175,6 +196,25 @@ def _verify_relay_off(app, device_id: str, channel: int, job_id: str):
                 )
         except Exception as exc:
             logger.warning("[VerifyOff] Error: %s", exc)
+        finally:
+            try:
+                scheduler_manager._scheduler.remove_job(job_id)
+            except Exception:
+                pass
+
+
+def _duration_off(app, device_id: str, channel: int, automation_id: int, job_id: str):
+    """One-shot job: fires relay OFF after duration_minutes has elapsed."""
+    with app.app_context():
+        try:
+            from app.mqtt_client import mqtt_manager
+            mqtt_manager.publish_relay_command(device_id, channel, False)
+            logger.info(
+                "[DurationOff] relay OFF sent  auto=%s device=%s ch=%s",
+                automation_id, device_id, channel,
+            )
+        except Exception as exc:
+            logger.warning("[DurationOff] Error: %s", exc)
         finally:
             try:
                 scheduler_manager._scheduler.remove_job(job_id)
@@ -284,13 +324,15 @@ class SchedulerManager:
                 auto.action,
                 auto.id,
                 auto.name,
+                getattr(auto, "duration_minutes", None),
                 auto.skip_if_raining,
                 getattr(auto, "until_float_off", False),
             ],
         )
         logger.debug(
-            "[Scheduler] Scheduled %s at %s days=%s skip_rain=%s until_float_off=%s",
+            "[Scheduler] Scheduled %s at %s days=%s dur=%s skip_rain=%s until_float_off=%s",
             job_id, auto.trigger_time, auto.trigger_days,
+            getattr(auto, "duration_minutes", None),
             auto.skip_if_raining, getattr(auto, "until_float_off", False),
         )
 

@@ -167,9 +167,11 @@ class MQTTManager:
             logger.info("[MQTT] relay_status → DB updated + SSE broadcast  device_id=%s", device_id)
 
             if relay1_on:
-                model = device_dict.get("model", "")
-                logger.warning("[MQTT] Relay1 turned ON → sending push notification  model=%s", model)
-                self._notify_relay1_on(device_id, model)
+                model        = device_dict.get("model", "")
+                model_serial = device_dict.get("model_serial", "")
+                logger.warning("[MQTT] Relay1 turned ON → sending push notification  model=%s serial=%s",
+                               model, model_serial)
+                self._notify_relay1_on(device_id, model_serial)
         else:
             logger.warning("[MQTT] relay_status → DB update skipped  device_id=%s", device_id)
 
@@ -262,35 +264,46 @@ class MQTTManager:
             logger.error("[MQTT] DB update error: %s", exc)
             return None, False
 
-    def _notify_relay1_on(self, device_id: str, model: str = ""):
-        if "rain" in model.lower():
+    def _notify_relay1_on(self, device_id: str, model_serial: str = ""):
+        """ใช้ model_serial เป็นหลัก — ดูคำหลัง IoT เหมือน frontend"""
+        s    = model_serial.lower()
+        core = s[3:] if s.startswith("iot") else s   # IoTWaterPlantX4 → waterplantx4
+
+        if core.startswith("rainsensor") or "rain" in core:
             title = "💧 เปิดวาล์วน้ำแล้ว"
             body  = "เปิดวาล์วปล่อยน้ำออกจากถังแล้ว"
-        else:
+        elif core.startswith("controller"):
+            title = "⚡ เปิด Controller แล้ว"
+            body  = f"อุปกรณ์ {model_serial} เปิด Relay 1 แล้ว"
+        elif core.startswith("waterplant") or core.startswith("water"):
             title = "🌿 เริ่มรดน้ำแล้ว"
             body  = "ระบบรดน้ำอัตโนมัติเริ่มทำงานแล้ว"
+        else:
+            title = "⚡ Relay เปิดแล้ว"
+            body  = f"อุปกรณ์ {model_serial} เปิด Relay 1 แล้ว"
 
         try:
             from app.services.fcm_service import send_push_to_all_members
             sent = send_push_to_all_members(
-                app   = self._app,
-                title = title,
-                body  = body,
-                data  = {"type": "relay1_on", "model": model},
+                app       = self._app,
+                title     = title,
+                body      = body,
+                data      = {"type": "relay1_on", "model": model},
+                dedup_key = f"relay1_on:{device_id}",
             )
             logger.warning("[MQTT] Push notification sent to %d device(s)  title=%r", sent, title)
         except Exception as exc:
             logger.error("[MQTT] _notify_relay1_on error: %s", exc)
 
     def _notify_rain(self, device_id: str):
-        """ส่ง push notification เมื่อ input=True มาจาก ESP32"""
         try:
             from app.services.fcm_service import send_push_to_all_members
             sent = send_push_to_all_members(
-                app   = self._app,
-                title = "🌧️ ฝนกำลังตก",
-                body  = "เซนเซอร์ตรวจจับว่าฝนกำลังตกอยู่",
-                data  = {"type": "rain_detected", "device_id": device_id},
+                app       = self._app,
+                title     = "🌧️ ฝนกำลังตก",
+                body      = "เซนเซอร์ตรวจจับว่าฝนกำลังตกอยู่",
+                data      = {"type": "rain_detected", "device_id": device_id},
+                dedup_key = f"rain:{device_id}",
             )
             logger.warning("[MQTT] Rain push sent to %d device(s)", sent)
         except Exception as exc:

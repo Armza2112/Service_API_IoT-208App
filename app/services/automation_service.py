@@ -27,6 +27,7 @@ class AutomationService:
         action:           bool,
         trigger_time:     str,
         trigger_days:     List[int],
+        duration_minutes: Optional[int] = None,
         skip_if_raining:  bool = False,
         until_float_off:  bool = False,
     ) -> Automation:
@@ -38,6 +39,7 @@ class AutomationService:
             trigger_time=trigger_time,
             trigger_days=trigger_days,
             is_enabled=True,
+            duration_minutes=duration_minutes if action else None,
             skip_if_raining=skip_if_raining,
             until_float_off=until_float_off,
             created_by=mem_id,
@@ -63,6 +65,12 @@ class AutomationService:
             auto.skip_if_raining = kwargs["skip_if_raining"]
         if "until_float_off" in kwargs and isinstance(kwargs["until_float_off"], bool):
             auto.until_float_off = kwargs["until_float_off"]
+
+        # duration_minutes: nullable int — clear when action=OFF
+        if "duration_minutes" in kwargs:
+            dm = kwargs["duration_minutes"]
+            action = kwargs.get("action", auto.action)
+            auto.duration_minutes = int(dm) if (dm and action) else None
 
         db.session.commit()
         db.session.refresh(auto)

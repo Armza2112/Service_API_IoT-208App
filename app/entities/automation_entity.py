@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from sqlalchemy import Boolean, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import ARRAY
@@ -81,6 +81,14 @@ class Automation(db.Model):
         comment="True=skip scene if rain sensor detects rain",
     )
 
+    # Duration: auto-OFF after N minutes (WaterPlant only, action=ON)
+    duration_minutes: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        default=None,
+        comment="Auto-off after N minutes (None = no auto-off)",
+    )
+
     # Float-off condition (Rain Sensor board only)
     # True: after relay ON fires, scheduler polls rain_history.input for this
     # device every 30 s and sends relay OFF once input=False (tank full / float triggered)
@@ -123,9 +131,10 @@ class Automation(db.Model):
             "action":          self.action,
             "trigger_time":    self.trigger_time,
             "trigger_days":    self.trigger_days,
-            "is_enabled":      self.is_enabled,
-            "skip_if_raining": self.skip_if_raining,
-            "until_float_off": self.until_float_off,
+            "is_enabled":        self.is_enabled,
+            "duration_minutes":  self.duration_minutes,
+            "skip_if_raining":   self.skip_if_raining,
+            "until_float_off":   self.until_float_off,
             "created_by":      self.created_by,
             "created_at":      self.created_at.isoformat() if self.created_at else None,
             "updated_at":      self.updated_at.isoformat() if self.updated_at else None,

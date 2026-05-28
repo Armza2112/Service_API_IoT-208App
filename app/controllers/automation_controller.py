@@ -44,6 +44,7 @@ def create_automation():
     action           = body.get("action")
     trigger_time     = (body.get("trigger_time") or "").strip()
     trigger_days     = body.get("trigger_days")
+    duration_minutes = body.get("duration_minutes")   # optional int
     skip_if_raining  = body.get("skip_if_raining", False)
     until_float_off  = body.get("until_float_off", False)
 
@@ -62,6 +63,10 @@ def create_automation():
         errors["trigger_time"] = "trigger_time must be HH:MM (00:00-23:59)"
     if not _validate_days(trigger_days):
         errors["trigger_days"] = "trigger_days must be a non-empty list of ints 0-6"
+    if duration_minutes is not None and (
+        not isinstance(duration_minutes, int) or duration_minutes < 1 or duration_minutes > 480
+    ):
+        errors["duration_minutes"] = "duration_minutes must be an integer 1-480"
     if not isinstance(skip_if_raining, bool):
         errors["skip_if_raining"] = "skip_if_raining must be true or false"
     if not isinstance(until_float_off, bool):
@@ -79,6 +84,7 @@ def create_automation():
             action=action,
             trigger_time=trigger_time,
             trigger_days=trigger_days,
+            duration_minutes=duration_minutes,
             skip_if_raining=skip_if_raining,
             until_float_off=until_float_off,
         )
@@ -158,6 +164,15 @@ def update_automation(automation_id: int):
             errors["until_float_off"] = "until_float_off must be true or false"
         else:
             kwargs["until_float_off"] = ufo
+
+    if "duration_minutes" in body:
+        dm = body["duration_minutes"]
+        if dm is None:
+            kwargs["duration_minutes"] = None
+        elif not isinstance(dm, int) or dm < 1 or dm > 480:
+            errors["duration_minutes"] = "duration_minutes must be an integer 1-480"
+        else:
+            kwargs["duration_minutes"] = dm
 
     if errors:
         return error_response("Validation failed", 422, errors)

@@ -225,6 +225,7 @@ def put_fcm_token():
 
 
 @auth_bp.route("/fcm-token", methods=["PATCH"])
+@require_auth
 def update_fcm_token():
     """
     PATCH /api/v1/auth/fcm-token

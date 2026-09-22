@@ -79,28 +79,25 @@ class DeviceService:
             },
         }
 
-    # ── Heartbeat ─────────────────────────────────────────────────────────────
+    # ── Role ──────────────────────────────────────────────────────────────────
+
+    _VALID_ROLES = {"water_outside", "water_inside", "door_outside", "door_inside"}
 
     @staticmethod
-    def update_heartbeat(device_id: str) -> dict | None:
-        device = DeviceProfile.query.filter_by(device_id=device_id).first()
-        if not device:
-            return None
-        device.is_active = True
-        device.last_seen = datetime.now(timezone.utc)
-        db.session.commit()
-        db.session.refresh(device)
-        return device.to_dict()
-
-    @staticmethod
-    def mark_stale_offline(timeout_minutes: int = 15) -> int:
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
-        stale = DeviceProfile.query.filter(
-            DeviceProfile.is_active == True,  # noqa: E712
-            DeviceProfile.last_seen < cutoff,
+    def get_roles() -> dict:
+        """คืน {role: device_id | None} สำหรับทุก role ที่รองรับ"""
+        result = {r: None for r in DeviceService._VALID_ROLES}
+        devices = DeviceProfile.query.filter(
+            DeviceProfile.role.in_(DeviceService._VALID_ROLES)
         ).all()
-        for device in stale:
-            device.is_active = False
-        if stale:
-            db.session.commit()
-        return len(stale)
+        for d in devices:
+            result[d.role] = d.device_id
+        return result
+
+    @staticmethod
+    def set_role(device_id: str, role: str | None) -> dict:
+        """
+        กำหนด role ให้ device — ถ้า role ซ้ำกับ device อื่น จะล้าง role เดิมออกก่อน
+        role=None หมายถึงเอา role ออก
+        """
+        # ล

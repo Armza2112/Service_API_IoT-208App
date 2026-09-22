@@ -23,6 +23,19 @@ class Config:
     )
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
+    # ── Connection pool ───────────────────────────────────────────────────────
+    # gthread: 16 threads → ต้องการ DB connections พร้อมกันสูงสุด ~16
+    # pool_size=10 + max_overflow=10 = สูงสุด 20 connections ซึ่งเกินพอ
+    # pool_timeout: รอ connection ว่างสูงสุด 10 วิ ก่อน timeout
+    # pool_recycle: คืน connection ทุก 30 นาที ป้องกัน stale connection
+    SQLALCHEMY_ENGINE_OPTIONS = {
+        "pool_size":    10,
+        "max_overflow": 10,
+        "pool_timeout": 10,
+        "pool_recycle": 1800,
+        "pool_pre_ping": True,    # ตรวจ connection ก่อนใช้ ป้องกัน "server closed connection"
+    }
+
     # JWT
     JWT_SECRET_KEY       = os.getenv("JWT_SECRET_KEY", SECRET_KEY)
     JWT_EXPIRE_DAYS      = int(os.getenv("JWT_EXPIRE_DAYS", "7"))

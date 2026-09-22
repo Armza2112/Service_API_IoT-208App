@@ -3,7 +3,10 @@ import re
 from flask import Blueprint, request
 
 from app.services.automation_service import AutomationService
+from app.services.device_service import DeviceService
 from app.utils.helpers import error_response, require_auth, success_response
+
+_DOOR_MODEL_SERIAL_PREFIX = "iotcontrollerdoor"  # lowercase startswith check
 
 automation_bp = Blueprint("automation", __name__, url_prefix="/automations")
 
@@ -74,6 +77,11 @@ def create_automation():
 
     if errors:
         return error_response("Validation failed", 422, errors)
+
+    # Door device: automation not supported
+    device = DeviceService.get_device_by_id(device_id)
+    if device and device.model_serial.lower().startswith(_DOOR_MODEL_SERIAL_PREFIX):
+        return error_response("ไม่รองรับ Automation สำหรับ Door controller", 422)
 
     try:
         auto = AutomationService.create(

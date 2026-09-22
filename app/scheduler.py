@@ -4,10 +4,14 @@ Job ID convention:
   "auto_<automation_id>"          -- scheduled relay trigger
   "float_off_<automation_id>"     -- post-trigger float-sensor monitor
   "verify_off_<device_id>_<ch>"   -- relay-off safety re-check after 5 min
+  "check_pump_overtime"           -- pump-on-too-long monitor (every 2 min)
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
+
+# Track which relay-on sessions have already been notified (prevents repeat alerts)
+_notified_pump_sessions: set[str] = set()
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -274,6 +278,83 @@ def _check_float_and_off(
             logger.warning("[FloatMonitor] Error in float check (auto=%s): %s", automation_id, exc)
 
 
+def _check_pump_overtime(app):
+    """
+    Periodic job (every 2 min): ถ้า relay ของปั้มน้ำเปิดมาเกิน 11 นาที → FCM
+    dedup ต่อ on-session (relay_history.id) ไม่แจ้งซ้ำสำหรับ session เดิม
+    """
+    global _notified_pump_sessions
+    THRESHOLD = timedelta(minutes=11)
+
+    with app.app_context():
+        try:
+            from app.entities.device_profile_entity import DeviceProfile
+            from app.entities.relay_history_entity import RelayHistory
+            from app.services.fcm_service import send_push_to_all_members
+
+            now = datetime.now(timezone.utc)
+
+            for device in DeviceProfile.query.filter_by(is_active=True).all():
+                ms   = device.model_serial.lower()
+                core = ms[3:] if ms.startswith("iot") else ms
+
+                # เฉพาะอุปกรณ์น้ำ — ข้ามประตูและ rain sensor
+                if core.startswith("controllerdoor") or core.startswith("rainsensor"):
+                    continue
+
+                relay_states = device.status_relay or []
+                for ch, is_on in enumerate(relay_states):
+                    if not is_on:
+                        continue
+
+                    # หา ON event ล่าสุดของ channel นี้
+                    last_on = (
+                        RelayHistory.query
+                        .filter_by(device_id=device.device_id, channel=ch, value=True)
+                        .order_by(RelayHistory.recorded_at.desc())
+                        .first()
+                    )
+                    if not last_on:
+                        continue
+
+                    recorded_at = last_on.recorded_at
+                    if recorded_at.tzinfo is None:
+                        recorded_at = recorded_at.replace(tzinfo=timezone.utc)
+
+                    elapsed = now - recorded_at
+                    if elapsed < THRESHOLD:
+                        continue
+
+                    # dedup ต่อ session (unique per history row id)
+                    session_key = f"pump_overtime:{device.device_id}:{ch}:{last_on.id}"
+                    if session_key in _notified_pump_sessions:
+                        continue
+                    _notified_pump_sessions.add(session_key)
+
+                    elapsed_min = int(elapsed.total_seconds() // 60)
+                    ch_label    = f"CH{ch + 1}"
+                    label       = device.model or device.model_serial
+
+                    send_push_to_all_members(
+                        app=app,
+                        title="⚠️ ปั้มน้ำเปิดนานเกินไป",
+                        body=f"{label} ({ch_label}) เปิดมาแล้ว {elapsed_min} นาที",
+                        data={
+                            "type":      "pump_overtime",
+                            "device_id": device.device_id,
+                            "channel":   str(ch),
+                        },
+                        dedup_key=session_key,
+                    )
+                    logger.warning(
+                        "[PumpOvertime] Notified device=%s ch=%s elapsed=%dm",
+                        device.device_id, ch, elapsed_min,
+                    )
+
+        except Exception as exc:
+            logger.error("[PumpOvertime] Error: %s", exc)
+
+
 class SchedulerManager:
     def __init__(self):
         self._scheduler = BackgroundScheduler(timezone="Asia/Bangkok")
@@ -294,6 +375,15 @@ class SchedulerManager:
             minutes=15,
             id="check_stale_devices",
             replace_existing=True,
+        )
+
+        self._scheduler.add_job(
+            func=_check_pump_overtime,
+            trigger="interval",
+            minutes=2,
+            id="check_pump_overtime",
+            replace_existing=True,
+            args=[app],
         )
 
         if not self._scheduler.running:

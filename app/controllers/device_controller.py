@@ -5,6 +5,7 @@ from flask import Blueprint, Response, request, stream_with_context
 
 from app.services.device_service import DeviceService
 from app.utils.helpers import error_response, is_valid_mac, require_auth, success_response
+from app.services.relay_history_service import RelayHistoryService
 
 device_bp = Blueprint("device", __name__, url_prefix="/devices")
 
@@ -120,6 +121,18 @@ def update_relay(device_id: str):
 
     published = mqtt_manager.publish_relay_command(device_id, channel, value)
 
+    # บันทึก history (ยกเว้นประตู)
+    _ms = device.model_serial.lower()
+    _is_door = (_ms[3:] if _ms.startswith("iot") else _ms).startswith("controllerdoor")
+    if not _is_door:
+        RelayHistoryService.record(
+            device_id=device_id,
+            device_name=device.model,
+            channel=channel,
+            value=value,
+            source="api",
+        )
+
     return success_response(
         {
             "device_id": device_id,
@@ -130,6 +143,52 @@ def update_relay(device_id: str):
         "Command sent" if published else "Command queued (MQTT offline)",
         200,
     )
+
+@device_bp.route("/roles", methods=["GET"])
+@require_auth
+def get_roles():
+    """
+    GET /api/v1/devices/roles
+    คืน device_id ของแต่ละ role
+    {
+      "data": {
+        "water_outside": "uuid | null",
+        "water_inside":  "uuid | null",
+        "door_outside":  "uuid | null",
+        "door_inside":   "uuid | null"
+      }
+    }
+    """
+    roles = DeviceService.get_roles()
+    return success_response(roles, "Roles retrieved", 200)
+
+
+@device_bp.route("/<string:device_id>/role", methods=["PATCH"])
+@require_auth
+def set_role(device_id: str):
+    """
+    PATCH /api/v1/devices/<device_id>/role
+    Body: {"role": "water_outside" | "water_inside" | "door_outside" | "door_inside" | null}
+    """
+    body = request.get_json(silent=True) or {}
+    role = body.get("role")
+
+    _VALID_ROLES = {"water_outside", "water_inside", "door_outside", "door_inside", None}
+    if role not in _VALID_ROLES:
+        return error_response(
+            f"role must be one of: water_outside, water_inside, door_outside, door_inside, null", 422
+        )
+
+    device = DeviceService.get_device_by_id(device_id)
+    if not device:
+        return error_response(f"Device not found: {device_id}", 404)
+
+    try:
+        updated = DeviceService.set_role(device_id, role)
+        return success_response(updated, "Role updated", 200)
+    except Exception as exc:
+        return error_response(str(exc), 500)
+
 
 @device_bp.route("/rain/latest", methods=["GET"])
 @require_auth
@@ -164,42 +223,33 @@ def get_rain_history():
         return error_response("device_id is required", 400)
 
     try:
-        limit = min(int(request.args.get("limit", 50)), 200)
+        limit = int(request.args.get("limit", 50))
     except ValueError:
-        return error_response("limit must be an integer", 400)
+        limit = 50
 
-    entries = RainService.get_history(device_id, limit=limit)
-    return success_response({"history": entries, "total": len(entries)}, "History retrieved", 200)
+    result = RainService.get_history(device_id, limit=limit)
+    return success_response(result, "Rain history retrieved", 200)
 
 
-@device_bp.route("/events", methods=["GET"])
+@device_bp.route("/relay/history", methods=["GET"])
 @require_auth
-def device_events():
+def get_relay_history():
     """
-    GET /api/v1/devices/events
+    GET /api/v1/devices/relay/history?page=1&per_page=50&device_id=<uuid>
+    คืนประวัติการเปิด-ปิด relay ทุกอุปกรณ์ (หรือกรองตาม device_id)
     """
-    from app.mqtt_client import mqtt_manager
+    try:
+        page     = int(request.args.get("page", 1))
+        per_page = min(int(request.args.get("per_page", 50)), 100)
+    except ValueError:
+        return error_response("page and per_page must be integers", 400)
 
-    q = mqtt_manager.subscribe_sse()
+    device_id = request.args.get("device_id", "").strip() or None
 
-    def generate():
-        yield ": " + " " * 2048 + "\n\n"
-        yield "event: ping\ndata: {}\n\n"
-        try:
-            while True:
-                try:
-                    data = q.get(timeout=15)
-                    yield f"data: {json.dumps(data)}\n\n"
-                except queue_module.Empty:
-                    yield "event: ping\ndata: {}\n\n"
-        finally:
-            mqtt_manager.unsubscribe_sse(q)
-
-    resp = Response(
-        stream_with_context(generate()),
-        mimetype="text/event-stream",
+    result = RelayHistoryService.list_history(
+        page=page,
+        per_page=per_page,
+        device_id=device_id,
     )
-    resp.headers["Cache-Control"]     = "no-cache"
-    resp.headers["X-Accel-Buffering"] = "no"
-    return resp
+    return success_response(result, "Relay history retrieved", 200)
 

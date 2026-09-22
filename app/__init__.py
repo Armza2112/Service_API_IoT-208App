@@ -33,6 +33,7 @@ def create_app(env: str = "default") -> Flask:
 
     with flask_app.app_context():
         db.create_all()
+        _run_migrations(flask_app)
 
     _register_blueprints(flask_app)
     _register_health(flask_app)
@@ -43,6 +44,28 @@ def create_app(env: str = "default") -> Flask:
     scheduler_manager.init_app(flask_app)
 
     return flask_app
+
+
+def _run_migrations(flask_app: Flask) -> None:
+    """
+    Idempotent schema migrations — ADD COLUMN IF NOT EXISTS ทำให้รันซ้ำได้เรื่อย ๆ
+    ใช้แทน Alembic สำหรับโปรเจกต์นี้เพราะไม่มี migration framework
+    """
+    migrations = [
+        # ── automations table ─────────────────────────────────────────────────
+        "ALTER TABLE automations ADD COLUMN IF NOT EXISTS duration_minutes INTEGER DEFAULT NULL;",
+        "ALTER TABLE automations ADD COLUMN IF NOT EXISTS skip_if_raining  BOOLEAN NOT NULL DEFAULT false;",
+        "ALTER TABLE automations ADD COLUMN IF NOT EXISTS until_float_off  BOOLEAN NOT NULL DEFAULT false;",
+    ]
+    try:
+        with db.engine.connect() as conn:
+            for sql in migrations:
+                conn.execute(db.text(sql))
+            conn.commit()
+    except Exception as exc:
+        # ถ้า table ยังไม่มี (รันก่อน create_all) หรือ error อื่น — ไม่ทำให้ app crash
+        import logging
+        logging.getLogger(__name__).warning("Migration warning: %s", exc)
 
 
 def _register_blueprints(flask_app: Flask) -> None:

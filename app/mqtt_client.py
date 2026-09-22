@@ -75,6 +75,7 @@ class MQTTManager:
             client.on_subscribe  = self._on_subscribe
             client.on_publish    = self._on_publish
 
+            client.reconnect_delay_set(min_delay=1, max_delay=30)
             client.connect(broker, port, keepalive=60)
             self._client = client
             client.loop_start()
@@ -89,14 +90,14 @@ class MQTTManager:
     def _on_connect(self, client, userdata, flags, rc, *args):
         if rc == 0:
             self._connected = True
-            client.subscribe(TOPIC_RELAY_STATUS, qos=1)
+            client.subscribe(TOPIC_RELAY_STATUS, qos=2)
             client.subscribe(TOPIC_HEARTBEAT,    qos=0)
-            client.subscribe(TOPIC_INPUT_STATUS, qos=1)
+            client.subscribe(TOPIC_INPUT_STATUS, qos=2)
             logger.info("=" * 60)
             logger.info("[MQTT] ✅ CONNECTED  rc=%s", rc)
-            logger.info("[MQTT]   subscribed : %s  (qos=1)", TOPIC_RELAY_STATUS)
+            logger.info("[MQTT]   subscribed : %s  (qos=2)", TOPIC_RELAY_STATUS)
             logger.info("[MQTT]   subscribed : %s  (qos=0)", TOPIC_HEARTBEAT)
-            logger.info("[MQTT]   subscribed : %s  (qos=1)", TOPIC_INPUT_STATUS)
+            logger.info("[MQTT]   subscribed : %s  (qos=2)", TOPIC_INPUT_STATUS)
             logger.info("=" * 60)
         else:
             self._connected = False
@@ -215,8 +216,8 @@ class MQTTManager:
             return
 
         if input_state:
-            logger.warning("[MQTT] Rain input=True (fresh) → sending FCM  device_id=%s", device_id)
-            self._notify_rain(device_id)
+            logger.warning("[MQTT] Rain input=True (fresh) → skip FCM (disabled)  device_id=%s", device_id)
+            # self._notify_rain(device_id)  # ปิดการแจ้งเตือนฝนตก
 
     def _update_db(self, device_id: str, payload: dict) -> tuple[dict | None, bool]:
         """
@@ -241,13 +242,29 @@ class MQTTManager:
 
                 if "relay" in payload and isinstance(payload["relay"], list) and len(payload["relay"]) >= 4:
                     new_relay = [bool(v) for v in payload["relay"][:4]]
+                    old_relay  = list(device.status_relay or [False, False, False, False])
 
-                    old_relay1 = bool((device.status_relay or [False])[0])
+                    old_relay1 = bool(old_relay[0])
                     new_relay1 = new_relay[0]
                     logger.warning("[MQTT]   relay[0] old=%s new=%s", old_relay1, new_relay1)
                     if not old_relay1 and new_relay1:
                         relay1_turned_on = True
                         logger.warning("[MQTT]   relay[0] transitioned OFF → ON → FCM will fire")
+
+                    # บันทึก history เฉพาะ channel ที่เปลี่ยน (ยกเว้นประตู)
+                    _ms = device.model_serial.lower()
+                    _is_door = (_ms[3:] if _ms.startswith("iot") else _ms).startswith("controllerdoor")
+                    if not _is_door:
+                        from app.services.relay_history_service import RelayHistoryService
+                        for ch in range(min(len(old_relay), len(new_relay))):
+                            if old_relay[ch] != new_relay[ch]:
+                                RelayHistoryService.record(
+                                    device_id=device_id,
+                                    device_name=device.model,
+                                    channel=ch,
+                                    value=new_relay[ch],
+                                    source="mqtt",
+                                )
 
                     device.status_relay = new_relay
                     logger.info("[MQTT]   relay state → %s", device.status_relay)
@@ -268,6 +285,11 @@ class MQTTManager:
         """ใช้ model_serial เป็นหลัก — ดูคำหลัง IoT เหมือน frontend"""
         s    = model_serial.lower()
         core = s[3:] if s.startswith("iot") else s   # IoTWaterPlantX4 → waterplantx4
+
+        # Door device: ไม่ส่ง push notification
+        if core.startswith("controllerdoor"):
+            logger.info("[MQTT] Door device — skip push notification  model_serial=%s", model_serial)
+            return
 
         if core.startswith("rainsensor") or "rain" in core:
             title = "💧 เปิดวาล์วน้ำแล้ว"
@@ -323,7 +345,7 @@ class MQTTManager:
 
         topic   = TOPIC_RELAY_CMD.format(device_id=device_id)
         payload = json.dumps({"channel": channel, "value": value})
-        result  = self._client.publish(topic, payload, qos=1)
+        result  = self._client.publish(topic, payload, qos=2)
         ok      = result.rc == mqtt.MQTT_ERR_SUCCESS
 
         logger.info("[MQTT] -> PUBLISH")

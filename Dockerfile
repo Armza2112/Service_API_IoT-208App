@@ -44,14 +44,17 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD curl -f http://localhost:3083/api/v1/health || exit 1
 
 # ── Start with Gunicorn (production WSGI) ────────────────────────────────────
-# --workers 2      → เหมาะกับ Pi ที่ RAM จำกัด
-# --threads 2      → รองรับ SSE / APScheduler background thread
+# --workers 1      → MQTT client + APScheduler ต้องอยู่ใน process เดียว
+# --threads 8      → Pi4 (4 cores): 8 threads รองรับ SSE ได้ไม่ทำ thread exhaustion
+# --worker-class   → ใช้ gthread จาก gunicorn.conf.py
 # --timeout 120    → SSE connections ไม่ timeout เร็วเกินไป
 CMD ["gunicorn", \
+     "--config", "gunicorn.conf.py", \
      "--bind", "0.0.0.0:3083", \
      "--workers", "1", \
-     "--threads", "4", \
+     "--threads", "16", \
      "--timeout", "120", \
+     "--worker-class", "gthread", \
      "--access-logfile", "-", \
      "--error-logfile", "-", \
      "wsgi:app"]

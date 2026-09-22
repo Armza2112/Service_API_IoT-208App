@@ -38,6 +38,9 @@ services:
       # CORS
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
 
+      # HMI Screen API Key (no login required)
+      HMI_API_KEY: ${HMI_API_KEY:-}
+
       # Firebase Admin SDK — Push Notification
       # ไฟล์ถูก COPY เข้า image แล้วผ่าน COPY . .
       FIREBASE_SERVICE_ACCOUNT_PATH: /app/iot-eefac-firebase-adminsdk-fbsvc-0d55a6cadf.json

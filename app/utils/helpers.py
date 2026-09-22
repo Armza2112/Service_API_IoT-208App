@@ -82,22 +82,34 @@ def decode_jwt(token: str) -> dict:
     return jwt.decode(token, _jwt_secret(), algorithms=["HS256"])
 
 
+def _hmi_api_key() -> str:
+    return os.getenv("HMI_API_KEY", "")
+
+
 def require_auth(f):
     """
-    Decorator ตรวจสอบ JWT access token
+    Decorator ตรวจสอบ JWT access token หรือ HMI API key
     ลำดับตรวจ:
-      1. Authorization: Bearer <token>  (ปกติ)
-      2. ?token=<token>                 (สำหรับ SSE / EventSource ที่ไม่รองรับ header)
+      1. X-Api-Key: <key>              (HMI screen — ไม่ต้อง login)
+      2. Authorization: Bearer <token> (ปกติ)
+      3. ?token=<token>                (SSE / EventSource)
     ถ้า valid → ใส่ payload ไว้ใน request.current_user
     """
     @wraps(f)
     def decorated(*args, **kwargs):
-        # 1. Header
+        # 1. HMI API key (no login required)
+        api_key = request.headers.get("X-Api-Key", "").strip()
+        hmi_key = _hmi_api_key()
+        if api_key and hmi_key and api_key == hmi_key:
+            request.current_user = {"mem_id": 0, "mem_username": "hmi_screen", "type": "access"}
+            return f(*args, **kwargs)
+
+        # 2. Bearer JWT
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header.split(" ", 1)[1].strip()
         else:
-            # 2. Query param fallback
+            # 3. Query param fallback
             token = request.args.get("token", "").strip()
 
         if not token:

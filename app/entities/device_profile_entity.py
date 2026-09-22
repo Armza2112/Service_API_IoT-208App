@@ -48,6 +48,14 @@ class DeviceProfile(db.Model):
         comment="208xxxxxx",
     )
 
+    # ── Role ─────────────────────────────────────────────────
+    role: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        default=None,
+        comment="UI role: water_outside | water_inside | door | None",
+    )
+
     # ── Relay Status ──────────────────────────────────────────
     status_relay: Mapped[List[bool]] = mapped_column(
         ARRAY(Boolean),
@@ -96,6 +104,7 @@ class DeviceProfile(db.Model):
             "mac_address": self.mac_address,
             "model": self.model,
             "model_serial": self.model_serial,
+            "role": self.role,
             "status_relay": self.status_relay,
             "is_active":  self.is_active,
             "last_seen":  self.last_seen.isoformat() if self.last_seen else None,
